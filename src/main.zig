@@ -102,10 +102,12 @@ pub fn main() !void {
     while (true) {
         try stdout.print("$ ", .{});
         const command = try parseCommand(allocator);
-        if (command.len == 1 ) {
-            try stdout.print("character: {d}\n", .{command[0]});
+
+        if (command.len == 0) {
             continue;
         }
+        const trimmed = std.mem.trim(u8, command[0], " \t\n");
+        if (trimmed.len == 0) continue;
 
         switch (commandType(command[0])) {
             .exit => std.process.exit(0),
