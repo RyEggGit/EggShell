@@ -106,6 +106,7 @@ pub fn main() !void {
         if (command.len == 0) {
             continue;
         }
+
         const trimmed = std.mem.trim(u8, command[0], " \t\n");
         if (trimmed.len == 0) continue;
 
@@ -135,8 +136,12 @@ pub fn main() !void {
             .cd => { 
                 var path = home_env;
 
-                if (command.len > 2) {
+                if (command.len > 1) {
                     path = command[1];
+                }
+
+                if (std.mem.eql(u8, path, "~")) {
+                    path = home_env;
                 }
 
                 var dir = try std.fs.cwd().openDir(path, .{});
