@@ -1,4 +1,5 @@
 const std = @import("std");
+const testing = std.testing;
 
 const Token = union(enum) {
     word: []const u8,
@@ -16,6 +17,7 @@ fn isSpecialCharacter(c: u8) bool {
         else => false,
     };
 }
+
 fn tokenize(input: []const u8, allocator: std.mem.Allocator) ![]Token {
     var tokens: std.ArrayList(Token) = .empty;
 
@@ -65,4 +67,27 @@ pub fn parseCommands(input: []const u8, allocator: std.mem.Allocator) !Commands 
     const commands = try parse(tokens, allocator);
 
     return commands;
+}
+
+fn expectTokens(input: []const u8, expected: []const Token, allocator: std.mem.Allocator) !void {
+    const tokens = try tokenize(input, allocator);
+    defer allocator.free(tokens);
+    try testing.expectEqualDeep(expected, tokens);
+}
+
+test "canonical example" {
+    try expectTokens("echo hello world", &[_]Token{ Token{ .word = "echo" }, Token{ .word = "hello" }, Token{ .word = "world" } }, testing.allocator);
+}
+
+test "quotes" {
+    try expectTokens("echo \"hello world\"", &[_]Token{ Token{ .word = "echo" }, Token{ .word = "hello world" } }, testing.allocator);
+}
+
+// TODO: Decide if an unmatched quote should be an error or if it should just assume until \n is the quote.
+test "unmatched quote" {
+    try expectTokens("echo \"hello world", &[_]Token{ Token{ .word = "echo" }, Token{ .word = "hello world" } }, testing.allocator);
+}
+
+test "leading and trailing spaces" {
+    try expectTokens("   echo hello world   ", &[_]Token{ Token{ .word = "echo" }, Token{ .word = "hello" }, Token{ .word = "world" } }, testing.allocator);
 }
