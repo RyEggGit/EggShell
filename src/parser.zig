@@ -33,6 +33,24 @@ fn tokenize(input: []const u8, allocator: std.mem.Allocator) ![]Token {
                 try tokens.append(allocator, .{ .word = str });
                 i += 1;
             },
+            '|' => {
+                if (i + 1 < input.len and input[i + 1] == '|') {
+                    try tokens.append(allocator, .{ .word = "||" });
+                    i += 2;
+                } else {
+                    try tokens.append(allocator, .{ .word = "|" });
+                    i += 1;
+                }
+            },
+            '&' => {
+                if (i + 1 < input.len and input[i + 1] == '&') {
+                    try tokens.append(allocator, .{ .word = "&&" });
+                    i += 2;
+                } else {
+                    try tokens.append(allocator, .{ .word = "&" });
+                    i += 1;
+                }
+            },
             else => {
                 const start = i;
                 while (i < input.len and !isSpecialCharacter(input[i])) : (i += 1) {}
@@ -90,4 +108,8 @@ test "unmatched quote" {
 
 test "leading and trailing spaces" {
     try expectTokens("   echo hello world   ", &[_]Token{ Token{ .word = "echo" }, Token{ .word = "hello" }, Token{ .word = "world" } }, testing.allocator);
+}
+
+test "pipes and logical operators" {
+    try expectTokens("echo hello | grep h && echo done", &[_]Token{ Token{ .word = "echo" }, Token{ .word = "hello" }, Token{ .word = "|" }, Token{ .word = "grep" }, Token{ .word = "h" }, Token{ .word = "&&" }, Token{ .word = "echo" }, Token{ .word = "done" } }, testing.allocator);
 }
