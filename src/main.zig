@@ -1,4 +1,6 @@
 const std = @import("std");
+const signals = @import("signals.zig");
+
 
 var stdout_writer = std.fs.File.stdout().writerStreaming(&.{});
 const stdout = &stdout_writer.interface;
@@ -6,48 +8,6 @@ const stdout = &stdout_writer.interface;
 var stdin_buffer: [4096]u8 = undefined;
 var stdin_reader = std.fs.File.stdin().readerStreaming(&stdin_buffer);
 const stdin = &stdin_reader.interface;
-
-const SignalHandler = struct {
-    sig: u6,
-    action: std.posix.Sigaction,
-};
-
-fn makeHandler(comptime f: fn (i32) callconv(.c) void, mask: std.posix.sigset_t) std.posix.Sigaction {
-    return .{
-        .handler = .{ .handler = f },
-        .mask = mask,
-        .flags = 0,
-    };
-}
-
-fn makeIgnore(mask: std.posix.sigset_t) std.posix.Sigaction {
-    return .{
-        .handler = .{ .handler = std.posix.SIG.IGN },
-        .mask = mask,
-        .flags = 0,
-    };
-}
-
-fn onSigint(_: i32) callconv(.c) void {
-    stdout.print("\n\n$ ", .{}) catch {};
-
-}
-fn onSigterm(_: i32) callconv(.c) void { std.process.exit(0); }
-
-fn registerSignals() void {
-    const mask = std.posix.sigemptyset();
-
-    const signal_handlers = [_]SignalHandler{
-        .{ .sig = std.posix.SIG.INT,  .action = makeHandler(onSigint, mask)  },
-        .{ .sig = std.posix.SIG.TERM, .action = makeHandler(onSigterm, mask) },
-        .{ .sig = std.posix.SIG.TSTP, .action = makeIgnore(mask)             },
-    };
-
-    for (signal_handlers) |sh| {
-        std.posix.sigaction(sh.sig, &sh.action, null);
-    }
-}
-
 
 const CommandType = enum {
     exit,
@@ -114,7 +74,7 @@ fn execute(command: []const []const u8, allocator: std.mem.Allocator) !u8 {
 }
 
 pub fn main() !void {
-    registerSignals();
+    signals.registerSignals();
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
