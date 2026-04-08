@@ -7,6 +7,47 @@ var stdin_buffer: [4096]u8 = undefined;
 var stdin_reader = std.fs.File.stdin().readerStreaming(&stdin_buffer);
 const stdin = &stdin_reader.interface;
 
+const SignalHandler = struct {
+    sig: u6,
+    action: std.posix.Sigaction,
+};
+
+fn makeHandler(comptime f: fn (i32) callconv(.c) void, mask: std.posix.sigset_t) std.posix.Sigaction {
+    return .{
+        .handler = .{ .handler = f },
+        .mask = mask,
+        .flags = 0,
+    };
+}
+
+fn makeIgnore(mask: std.posix.sigset_t) std.posix.Sigaction {
+    return .{
+        .handler = .{ .handler = std.posix.SIG.IGN },
+        .mask = mask,
+        .flags = 0,
+    };
+}
+
+fn onSigint(_: i32) callconv(.c) void {
+    stdout.print("\n\n$ ", .{}) catch {};
+
+}
+fn onSigterm(_: i32) callconv(.c) void { std.process.exit(0); }
+
+fn registerSignals() void {
+    const mask = std.posix.sigemptyset();
+
+    const signal_handlers = [_]SignalHandler{
+        .{ .sig = std.posix.SIG.INT,  .action = makeHandler(onSigint, mask)  },
+        .{ .sig = std.posix.SIG.TERM, .action = makeHandler(onSigterm, mask) },
+        .{ .sig = std.posix.SIG.TSTP, .action = makeIgnore(mask)             },
+    };
+
+    for (signal_handlers) |sh| {
+        std.posix.sigaction(sh.sig, &sh.action, null);
+    }
+}
+
 
 const CommandType = enum {
     exit,
@@ -16,19 +57,16 @@ const CommandType = enum {
     unknown,
 };
 
-fn parseCommand(allocator: std.mem.Allocator) ![]const[]const u8 {
-    try stdout.flush();
-
-    const fullCommand = try stdin.takeDelimiter('\n');
-    var it = std.mem.splitSequence(u8, fullCommand.?, " ");
+fn parseCommand(allocator: std.mem.Allocator) !?[][]const u8 {
+    const fullCommand = try stdin.takeDelimiter('\n') orelse return null;
+    var it = std.mem.splitSequence(u8, fullCommand, " ");
 
     var command: std.ArrayList([]const u8) = .empty;
-
     while (it.next()) |arg| {
         try command.append(allocator, arg);
     }
-    
-    return command.toOwnedSlice(allocator);
+
+    return @as(?[][]const u8, try command.toOwnedSlice(allocator));
 }
 
 fn commandType(cmd: []const u8) CommandType {
@@ -76,6 +114,8 @@ fn execute(command: []const []const u8, allocator: std.mem.Allocator) !u8 {
 }
 
 pub fn main() !void {
+    registerSignals();
+
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
@@ -98,7 +138,10 @@ pub fn main() !void {
 
     while (true) {
         try stdout.print("$ ", .{});
-        const command = try parseCommand(allocator);
+        const command: [][]const u8 = try parseCommand(allocator) orelse {
+            try stdout.print("\n", .{});
+            std.process.exit(0);
+        };
 
         if (command.len == 0) {
             continue;
@@ -142,19 +185,19 @@ pub fn main() !void {
                     defer dir.close();
                     try dir.setAsCwd();
                 } else | _ | {
-                    try stdout.print("{s}: No such file or directory\n", .{command[0]}); 
+                    try stdout.print("{s}: No such file or directory\n", .{command[1]}); 
                 } 
             }, 
             .unknown => {
-                const matches = try findMatchingPath(allocator, paths.items, command[0]);
+                if (try findMatchingPath(allocator, paths.items, command[0])) | _ |  {
 
-                if (matches.len == 0) {
-                    try stdout.print("{s}: not found\n", .{command[0]});
-                } else {
                     const response = try execute(command, allocator);
                     if (response != 0) {
                         try stdout.print("{s}: failed with status code {d}\n", .{command[0], response});
                     }
+                } else {
+                    try stdout.print("{s}: command not found\n", .{command[0]});
+
                 }
 
             },
