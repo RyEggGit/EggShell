@@ -14,14 +14,16 @@ const CommandType = enum {
     echo,
     type,
     cd,
+    pwd,
     unknown,
 };
 
 fn commandType(cmd: []const u8) CommandType {
     if (std.mem.eql(u8, cmd, "exit")) return .exit;
+    if (std.mem.eql(u8, cmd, "pwd")) return .pwd;
+    if (std.mem.eql(u8, cmd, "cd")) return .cd;
     if (std.mem.eql(u8, cmd, "echo")) return .echo;
     if (std.mem.eql(u8, cmd, "type")) return .type;
-    if (std.mem.eql(u8, cmd, "cd")) return .cd;
     return .unknown;
 }
 
@@ -110,6 +112,11 @@ pub fn main() !void {
                         try stdout.print("{s}: not found\n", .{arg});
                     }
                 },
+                .pwd => {
+                    const path = try std.fs.cwd().realpathAlloc(allocator, ".");
+                    try stdout.print("{s}\n", .{path});
+                    defer allocator.free(path);
+                },
                 .cd => {
                     var path = home_env;
 
@@ -121,6 +128,7 @@ pub fn main() !void {
                         path = home_env;
                     }
 
+                    // This hadnles relative paths like ".." 
                     if (std.fs.cwd().openDir(path, .{})) |d| {
                         var dir = d;
                         defer dir.close();
