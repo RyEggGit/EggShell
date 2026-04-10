@@ -3,14 +3,22 @@ const testing = std.testing;
 
 const Token = union(enum) {
     word: []const u8,
-    // TODO: implement features as needed
     pipe, // |
     logical_or, // ||
-    // logical_and, // &&
+    background, // &
+    logical_and, // &&
 };
 
-pub const Command = [][]const u8;
+const Command = []const []const u8;
 const Commands = []Command;
+
+const Node = union(enum) {
+    // pipe(Node, Node),
+    logical_or: struct { *const Node, *const Node },
+    logical_and: struct { *const Node, *const Node },
+    // background(Node),
+    command: Command,
+};
 
 fn isSpecialCharacter(c: u8) bool {
     return switch (c) {
@@ -19,7 +27,7 @@ fn isSpecialCharacter(c: u8) bool {
     };
 }
 
-fn tokenize(input: []const u8, allocator: std.mem.Allocator) ![]Token {
+fn lex(input: []const u8, allocator: std.mem.Allocator) ![]Token {
     var tokens: std.ArrayList(Token) = .empty;
 
     var i: usize = 0;
@@ -45,10 +53,10 @@ fn tokenize(input: []const u8, allocator: std.mem.Allocator) ![]Token {
             },
             '&' => {
                 if (i + 1 < input.len and input[i + 1] == '&') {
-                    try tokens.append(allocator, .{ .word = "&&" });
+                    try tokens.append(allocator, Token.logical_and);
                     i += 2;
                 } else {
-                    try tokens.append(allocator, .{ .word = "&" });
+                    try tokens.append(allocator, Token.background);
                     i += 1;
                 }
             },
@@ -63,54 +71,194 @@ fn tokenize(input: []const u8, allocator: std.mem.Allocator) ![]Token {
     return tokens.toOwnedSlice(allocator);
 }
 
-fn parse(tokens: []Token, allocator: std.mem.Allocator) !Commands {
-    var commands: std.ArrayList(Command) = .empty;
-    var current: std.ArrayList([]const u8) = .empty;
+const Parser = struct {
+    gpa: std.mem.Allocator,
+    tok_i: u64,
+    tokens: []Token,
 
-    for (tokens) |t| {
-        switch (t) {
-            .word => |w| try current.append(allocator, w),
+    fn peek(self: *Parser) Token {
+        return self.tokens[self.tok_i];
+    }
+
+    fn consume(self: *Parser) Token {
+        const token = self.peek();
+        self.tok_i += 1;
+        return token;
+    }
+
+    // foo || bar -> LogicalOr{ Command{ .{ "foo" } }, Command{ .{ "bar" } } }
+    fn parserOr(self: *Parser) !Node {
+        var left: Node = try self.parseAnd();
+
+        while (self.tok_i < self.tokens.len and self.peek() == .logical_or) {
+            _ = self.consume();
+            const right = try self.parseAnd();
+            const left_ptr = try self.gpa.create(Node);
+            const right_ptr = try self.gpa.create(Node);
+            left_ptr.* = left;
+            right_ptr.* = right;
+            left = Node{ .logical_or = .{ left_ptr, right_ptr } };
         }
+
+        return left;
     }
 
-    // last command
-    if (current.items.len > 0) {
-        try commands.append(allocator, try current.toOwnedSlice(allocator));
+    // foo && bar -> LogicalAnd{ Command{ .{ "foo" } }, Command{ .{ "bar" } } }
+    fn parseAnd(self: *Parser) !Node {
+        var left: Node = try self.parseCommand();
+
+        while (self.tok_i < self.tokens.len and self.peek() == .logical_and) {
+            _ = self.consume();
+            const right = try self.parseCommand();
+            const left_ptr = try self.gpa.create(Node);
+            const right_ptr = try self.gpa.create(Node);
+            left_ptr.* = left;
+            right_ptr.* = right;
+            left = Node{ .logical_and = .{ left_ptr, right_ptr } };
+        }
+
+        return left;
     }
 
-    return try commands.toOwnedSlice(allocator);
+    // echo --foo --bar "baz" -> Command{ .{ "echo", "--foo", "--bar", "baz" } }
+    fn parseCommand(self: *Parser) !Node {
+        var argv: std.ArrayList([]const u8) = .empty;
+
+        while (self.tok_i < self.tokens.len and self.peek() == .word) {
+            const token = self.consume();
+            try argv.append(self.gpa, token.word);
+        }
+
+        return Node{ .command = try argv.toOwnedSlice(self.gpa) };
+    }
+};
+
+// fn parse(tokens: []Token, allocator: std.mem.Allocator) !Commands {
+//     var commands: std.ArrayList(Command) = .empty;
+//     var current: std.ArrayList([]const u8) = .empty;
+
+//     for (tokens) |t| {
+//         switch (t) {
+//             .word => |w| try current.append(allocator, w),
+//         }
+//     }
+
+//     // last command
+//     if (current.items.len > 0) {
+//         try commands.append(allocator, try current.toOwnedSlice(allocator));
+//     }
+
+//     return try commands.toOwnedSlice(allocator);
+// }
+
+pub fn parseCommands(input: []const u8, allocator: std.mem.Allocator) !Node {
+    const tokens = try lex(input, allocator);
+    var parser = Parser{
+        .gpa = allocator,
+        .tok_i = 0,
+        .tokens = tokens,
+    };
+    return try parser.parserOr();
 }
 
-pub fn parseCommands(input: []const u8, allocator: std.mem.Allocator) !Commands {
-    const tokens = try tokenize(input, allocator);
-    const commands = try parse(tokens, allocator);
-
-    return commands;
-}
-
-fn expectTokens(input: []const u8, expected: []const Token, allocator: std.mem.Allocator) !void {
-    const tokens = try tokenize(input, allocator);
-    defer allocator.free(tokens);
+// Testing helper function.
+fn expectTokens(input: []const u8, expected: []const Token) !void {
+    const tokens = try lex(input, testing.allocator);
+    defer testing.allocator.free(tokens);
     try testing.expectEqualDeep(expected, tokens);
 }
 
+fn freeNode(allocator: std.mem.Allocator, node: Node) void {
+    switch (node) {
+        .command => |cmd| allocator.free(cmd),
+        .logical_and, .logical_or => |pair| {
+            freeNode(allocator, pair[0].*);
+            freeNode(allocator, pair[1].*);
+            allocator.destroy(pair[0]);
+            allocator.destroy(pair[1]);
+        },
+    }
+}
+
+fn expectCommands(input: []const u8, expected: Node) !void {
+    const tokens = try lex(input, testing.allocator);
+    defer testing.allocator.free(tokens);
+    var parser = Parser{
+        .gpa = testing.allocator,
+        .tok_i = 0,
+        .tokens = tokens,
+    };
+    const commands = try parser.parserOr();
+    defer freeNode(testing.allocator, commands);
+    try testing.expectEqualDeep(expected, commands);
+}
+
 test "canonical example" {
-    try expectTokens("echo hello world", &[_]Token{ Token{ .word = "echo" }, Token{ .word = "hello" }, Token{ .word = "world" } }, testing.allocator);
+    try expectTokens("echo hello world", &.{
+        .{ .word = "echo" },
+        .{ .word = "hello" },
+        .{ .word = "world" },
+    });
 }
 
 test "quotes" {
-    try expectTokens("echo \"hello world\"", &[_]Token{ Token{ .word = "echo" }, Token{ .word = "hello world" } }, testing.allocator);
+    try expectTokens("echo \"hello world\"", &.{
+        .{ .word = "echo" },
+        .{ .word = "hello world" },
+    });
+}
+
+test "flags" {
+    try expectTokens("compile --drafts main.mk", &.{
+        .{ .word = "compile" },
+        .{ .word = "--drafts" },
+        .{ .word = "main.mk" },
+    });
+}
+
+test "dot slash" {
+    try expectTokens("./a.out", &.{
+        .{ .word = "./a.out" },
+    });
 }
 
 // TODO: Decide if an unmatched quote should be an error or if it should just assume until \n is the quote.
 test "unmatched quote" {
-    try expectTokens("echo \"hello world", &[_]Token{ Token{ .word = "echo" }, Token{ .word = "hello world" } }, testing.allocator);
+    try expectTokens("echo \"hello world", &.{
+        .{ .word = "echo" },
+        .{ .word = "hello world" },
+    });
 }
 
 test "leading and trailing spaces" {
-    try expectTokens("   echo hello world   ", &[_]Token{ Token{ .word = "echo" }, Token{ .word = "hello" }, Token{ .word = "world" } }, testing.allocator);
+    try expectTokens("   echo hello world   ", &.{ .{ .word = "echo" }, .{ .word = "hello" }, .{
+        .word = "world",
+    } });
 }
 
 test "pipes and logical operators" {
-    try expectTokens("echo hello | grep h && echo done", &[_]Token{ Token{ .word = "echo" }, Token{ .word = "hello" }, Token.pipe, Token{ .word = "grep" }, Token{ .word = "h" }, Token{ .word = "&&" }, Token{ .word = "echo" }, Token{ .word = "done" } }, testing.allocator);
+    try expectTokens(
+        "echo hello | grep h && echo done &",
+        &.{
+            .{ .word = "echo" },
+            .{ .word = "hello" },
+            .pipe,
+            .{ .word = "grep" },
+            .{ .word = "h" },
+            .logical_and,
+            .{ .word = "echo" },
+            .{ .word = "done" },
+            .background,
+        },
+    );
+}
+
+test "parse commands" {
+    try expectCommands(
+        "echo hello && echo bye",
+        Node{ .logical_and = .{
+            &Node{ .command = &.{ "echo", "hello" } },
+            &Node{ .command = &.{ "echo", "bye" } },
+        } },
+    );
 }
