@@ -162,24 +162,6 @@ const Parser = struct {
     }
 };
 
-// fn parse(tokens: []Token, allocator: std.mem.Allocator) !Commands {
-//     var commands: std.ArrayList(Command) = .empty;
-//     var current: std.ArrayList([]const u8) = .empty;
-
-//     for (tokens) |t| {
-//         switch (t) {
-//             .word => |w| try current.append(allocator, w),
-//         }
-//     }
-
-//     // last command
-//     if (current.items.len > 0) {
-//         try commands.append(allocator, try current.toOwnedSlice(allocator));
-//     }
-
-//     return try commands.toOwnedSlice(allocator);
-// }
-
 pub fn parseCommands(input: []const u8, allocator: std.mem.Allocator) !struct { u32, []Node } {
     const tokens = try lex(input, allocator);
     var parser = Parser{
@@ -210,15 +192,8 @@ fn freeNodes(allocator: std.mem.Allocator, nodes: []Node) void {
 }
 
 fn expectCommands(input: []const u8, expected: []const Node) !void {
-    const tokens = try lex(input, testing.allocator);
-    defer testing.allocator.free(tokens);
-    var parser = Parser{
-        .gpa = testing.allocator,
-        .tok_i = 0,
-        .tokens = tokens,
-    };
-    _ = try parser.parserOr();
-    const nodes = try parser.nodes.toOwnedSlice(testing.allocator);
+    const foo, const nodes = try parseCommands(input, testing.allocator);
+    _ = foo;
     defer freeNodes(testing.allocator, nodes);
     try testing.expectEqualDeep(expected, nodes);
 }
