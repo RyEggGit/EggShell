@@ -10,7 +10,7 @@ const Token = union(enum) {
 };
 
 const Command = []const []const u8;
-const Commands = []Command;
+const Commands = []const Command;
 
 const Node = union(enum) {
     // pipe(Node, Node),
