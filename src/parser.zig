@@ -12,11 +12,10 @@ const Token = union(enum) {
 pub const Command = []const []const u8;
 pub const Commands = []const Command;
 
+// TODO: Add background, pipe
 const Node = union(enum) {
-    // pipe(Node, Node),
     logical_or: struct { u32, u32 },
     logical_and: struct { u32, u32 },
-    // background(Node),
     command: Command,
 };
 
