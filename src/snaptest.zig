@@ -121,7 +121,7 @@ pub const Snap = struct {
     ///   - `SNAP_UPDATE` env var.
     fn should_update(snapshot: *const Snap) bool {
         return snapshot.update_this or update_all or
-            std.process.hasEnvVarConstant("SNAP_UPDATE");
+            std.testing.environ.containsUnemptyConstant("SNAP_UPDATE");
     }
 
     // Compare the snapshot with a formatted string.
@@ -179,7 +179,7 @@ pub const Snap = struct {
 
         const file_path = try std.fmt.allocPrint(allocator, "src/{s}", .{snapshot.location.file});
         const file_text =
-            try std.fs.cwd().readFileAlloc(allocator, file_path, 1024 * 1024);
+            try std.Io.Dir.cwd().readFileAlloc(std.testing.io, file_path, allocator, .limited(1024 * 1024));
         var file_text_updated = try std.ArrayList(u8).initCapacity(allocator, file_text.len);
 
         const line_zero_based = snapshot.location.line - 1;
@@ -195,12 +195,12 @@ pub const Snap = struct {
         {
             var lines = std.mem.splitScalar(u8, got, '\n');
             while (lines.next()) |line| {
-                try file_text_updated.writer(allocator).print("{s}\\\\{s}\n", .{ indent, line });
+                try file_text_updated.print(allocator, "{s}\\\\{s}\n", .{ indent, line });
             }
         }
         try file_text_updated.appendSlice(allocator, snapshot_suffix);
 
-        try std.fs.cwd().writeFile(.{ .sub_path = file_path, .data = file_text_updated.items });
+        try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = file_path, .data = file_text_updated.items });
 
         std.debug.print("Updated {s}\n", .{file_path});
         return error.SnapUpdated;

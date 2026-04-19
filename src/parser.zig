@@ -267,9 +267,9 @@ fn checkTree(input: []const u8, want: Snap) !void {
     const tokens = try lex(input, allocator);
     var parser = Parser.new(allocator, tokens);
     const root = try parser.parse();
-    var buf: std.ArrayList(u8) = .empty;
-    try parser.printNode(buf.writer(allocator), root);
-    try want.diff(buf.items);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    try parser.printNode(&aw.writer, root);
+    try want.diff(aw.writer.buffered());
 }
 
 test "snap: simple command" {

@@ -33,10 +33,7 @@ pub fn build(b: *std.Build) void {
     }
 
     const test_step = b.step("test", "Run unit tests");
-    const test_sources = [_][]const u8{
-        "src/parser.zig",
-        "src/util/ring_buffer.zig",
-    };
+    const test_sources = [_][]const u8{ "src/parser.zig", "src/util/ring_buffer.zig" };
 
     for (test_sources) |src| {
         const unit_tests = b.addTest(.{
