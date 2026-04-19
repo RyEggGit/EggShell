@@ -21,7 +21,7 @@ pub fn parseBuiltin(command: Command) Builtin {
     return .unknown;
 }
 
-var stdout_writer = std.fs.File.stdout().writerStreaming(&.{});
+var stdout_writer = std.Io.File.writerStreaming(std.Io.File.stdout(), std.Io.Threaded, &.{});
 const stdout = &stdout_writer.interface;
 
 pub fn doExit(_: Command, _: std.mem.Allocator) noreturn {
@@ -90,7 +90,6 @@ pub fn doUnknown(command: Command, allocator: std.mem.Allocator) !void {
     }
 }
 
-
 // for a command check if it exists in path
 fn findMatchingPath(allocator: std.mem.Allocator, command: []const u8) !?[]const u8 {
     var env_map = try std.process.getEnvMap(allocator);
@@ -139,4 +138,3 @@ fn execute(command: []const []const u8, allocator: std.mem.Allocator) !u8 {
         .Unknown => 1,
     };
 }
-

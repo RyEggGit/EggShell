@@ -1,14 +1,29 @@
 const std = @import("std");
 
-var stdout_writer = std.fs.File.stdout().writerStreaming(&.{});
-const stdout = &stdout_writer.interface;
+var stdout_buffer: [4096]u8 = undefined;
+var stdout: ?*std.Io.Writer = null;
 
-const SignalHandler = struct {
-    sig: u6,
-    action: std.posix.Sigaction,
-};
+fn onSigint(_: std.posix.SIG) callconv(.c) void {
+    if (stdout) |w| {
+        w.print("\n\n$ ", .{}) catch {};
+    }
+}
 
-fn makeHandler(comptime f: fn (i32) callconv(.c) void, mask: std.posix.sigset_t) std.posix.Sigaction {
+fn onSigterm(_: std.posix.SIG) callconv(.c) void {
+    std.process.exit(0);
+}
+
+pub fn register(io: std.Io) void {
+    var w = std.Io.File.writerStreaming(std.Io.File.stdout(), io, &stdout_buffer);
+    stdout = &w.interface; // still wrong — see note
+
+    const mask = std.posix.sigemptyset();
+    std.posix.sigaction(std.posix.SIG.INT, &action(onSigint, mask), null);
+    std.posix.sigaction(std.posix.SIG.TERM, &action(onSigterm, mask), null);
+    std.posix.sigaction(std.posix.SIG.TSTP, &ignore(mask), null);
+}
+
+fn action(comptime f: fn (std.posix.SIG) callconv(.c) void, mask: std.posix.sigset_t) std.posix.Sigaction {
     return .{
         .handler = .{ .handler = f },
         .mask = mask,
@@ -16,31 +31,10 @@ fn makeHandler(comptime f: fn (i32) callconv(.c) void, mask: std.posix.sigset_t)
     };
 }
 
-fn makeIgnore(mask: std.posix.sigset_t) std.posix.Sigaction {
+fn ignore(mask: std.posix.sigset_t) std.posix.Sigaction {
     return .{
         .handler = .{ .handler = std.posix.SIG.IGN },
         .mask = mask,
         .flags = 0,
     };
-}
-
-fn onSigint(_: i32) callconv(.c) void {
-    stdout.print("\n\n$ ", .{}) catch {};
-}
-fn onSigterm(_: i32) callconv(.c) void {
-    std.process.exit(0);
-}
-
-pub fn registerSignals() void {
-    const mask = std.posix.sigemptyset();
-
-    const signal_handlers = [_]SignalHandler{
-        .{ .sig = std.posix.SIG.INT, .action = makeHandler(onSigint, mask) },
-        .{ .sig = std.posix.SIG.TERM, .action = makeHandler(onSigterm, mask) },
-        .{ .sig = std.posix.SIG.TSTP, .action = makeIgnore(mask) },
-    };
-
-    for (signal_handlers) |sh| {
-        std.posix.sigaction(sh.sig, &sh.action, null);
-    }
 }
