@@ -29,8 +29,8 @@ pub fn main(init: std.process.Init) !void {
     };
 
     while (true) {
-        _ = try std.process.currentPath(io, &prompt_buf);
-        try s.stdout.print("{s} $ ", .{prompt_buf});
+        const len = try std.process.currentPath(io, &prompt_buf);
+        try s.stdout.print("{s} $ ", .{prompt_buf[0..len]});
         try s.stdout.flush();
         const input = try s.stdin.takeDelimiter('\n') orelse {
             try s.stdout.print("\n", .{});
