@@ -1,40 +1,48 @@
+// Copyright 2026 Ryan Eggens
+
 const std = @import("std");
 const signals = @import("signals.zig");
 const parser = @import("parser.zig");
-const builtins = @import("builtins.zig");
-const Command = parser.Command;
+const executer = @import("executer.zig");
+const shell = @import("shell.zig");
 
-var stdout_writer = std.fs.File.stdout().writerStreaming(&.{});
-const stdout = &stdout_writer.interface;
-
+var stdout_buffer: [4096]u8 = undefined;
 var stdin_buffer: [4096]u8 = undefined;
-var stdin_reader = std.fs.File.stdin().readerStreaming(&stdin_buffer);
-const stdin = &stdin_reader.interface;
 
-pub fn main() !void {
-    signals.registerSignals();
-
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+    var arena = init.arena;
     defer arena.deinit();
 
-    const allocator = arena.allocator();
+    signals.register();
+
+    var stdout_writer = std.Io.File.writerStreaming(std.Io.File.stdout(), io, &stdout_buffer);
+    var stdin_reader = std.Io.File.readerStreaming(std.Io.File.stdin(), io, &stdin_buffer);
+
+    var s = shell.Shell{
+        .allocator = arena.allocator(),
+        .stdout = &stdout_writer.interface,
+        .stdin = &stdin_reader.interface,
+        .io = io,
+        .env = init.environ_map,
+    };
 
     while (true) {
-        try stdout.print("$ ", .{});
-        const input = try stdin.takeDelimiter('\n') orelse {
-            try stdout.print("\n", .{});
+        try s.stdout.print("$ ", .{});
+        try s.stdout.flush();
+        const input = try s.stdin.takeDelimiter('\n') orelse {
+            try s.stdout.print("\n", .{});
             std.process.exit(0);
         };
-        const commands = try parser.parseCommands(input, allocator);
-        for (commands) |command| {
-            try switch (builtins.parseBuiltin(command)) {
-                .exit => builtins.doExit(command, allocator),
-                .echo => builtins.doEcho(command, allocator),
-                .type => builtins.doType(command, allocator),
-                .pwd => builtins.doPwd(command, allocator),
-                .cd => builtins.doCd(command, allocator),
-                .unknown => builtins.doUnknown(command, allocator),
-            };
+        const tokens = try parser.lex(input, s.allocator);
+        defer s.allocator.free(tokens);
+        var p = parser.Parser.new(s.allocator, tokens);
+        const node = try p.parse();
+
+        const retval = try executer.exec(&s, &p, node);
+
+        if (retval != 0) {
+            std.process.exit(retval);
         }
     }
 }

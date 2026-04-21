@@ -1,6 +1,7 @@
 const std = @import("std");
 const parser = @import("parser.zig");
 const Command = parser.Command;
+const Shell = @import("shell.zig").Shell;
 
 const Builtin = enum {
     exit,
@@ -21,95 +22,82 @@ pub fn parseBuiltin(command: Command) Builtin {
     return .unknown;
 }
 
-var stdout_writer = std.fs.File.stdout().writerStreaming(&.{});
-const stdout = &stdout_writer.interface;
-
-pub fn doExit(_: Command, _: std.mem.Allocator) noreturn {
+pub fn doExit(_: *Shell, _: Command) noreturn {
     std.process.exit(0);
 }
 
-pub fn doEcho(command: Command, allocator: std.mem.Allocator) !void {
-    const args = try std.mem.join(allocator, " ", command[1..]);
-    try stdout.print("{s}\n", .{args});
+pub fn doEcho(self: *Shell, command: Command) !void {
+    const args = try std.mem.join(self.allocator, " ", command[1..]);
+    try self.stdout.print("{s}\n", .{args});
 }
 
-pub fn doType(command: Command, allocator: std.mem.Allocator) !void {
+pub fn doType(self: *Shell, command: Command) !void {
     // TODO: bring this functionality back
     const arg = command[1];
     // if (parseBuiltin(arg) != .unknown) {
-    //     try stdout.print("{s} is a shell builtin\n", .{arg});
+    //     try self.stdout.print("{s} is a shell builtin\n", .{arg});
     //     return;
     // }
 
-    if (try findMatchingPath(allocator, arg)) |match| {
-        try stdout.print("{s} is {s}\n", .{ arg, match });
+    if (try findMatchingPath(self, arg)) |match| {
+        try self.stdout.print("{s} is {s}\n", .{ arg, match });
     } else {
-        try stdout.print("{s}: not found\n", .{arg});
+        try self.stdout.print("{s}: not found\n", .{arg});
     }
 }
 
-pub fn doPwd(_: Command, allocator: std.mem.Allocator) !void {
-    const path = try std.fs.cwd().realpathAlloc(allocator, ".");
-    defer allocator.free(path);
-    try stdout.print("{s}\n", .{path});
+pub fn doPwd(self: *Shell, _: Command) !void {
+    const path = try std.process.currentPathAlloc(self.io, self.allocator);
+    defer self.allocator.free(path);
+    try self.stdout.print("{s}\n", .{path});
 }
 
-pub fn doCd(command: Command, allocator: std.mem.Allocator) !void {
-    var env_map = try std.process.getEnvMap(allocator);
-    defer env_map.deinit();
-
-    const home_env = env_map.get("HOME") orelse "";
-    var path = home_env;
+pub fn doCd(self: *Shell, command: Command) !void {
+    var path = self.home();
 
     if (command.len > 1) {
         path = command[1];
     }
 
     if (std.mem.eql(u8, path, "~")) {
-        path = home_env;
+        path = self.home();
     }
 
-    // This hadnles relative paths like ".."
-    if (std.fs.cwd().openDir(path, .{})) |d| {
+    // This handles relative paths like ".."
+    if (std.Io.Dir.openDir(.cwd(), self.io, path, .{})) |d| {
         var dir = d;
-        defer dir.close();
-        try dir.setAsCwd();
+        defer dir.close(self.io);
+        try std.process.setCurrentDir(self.io, dir);
     } else |_| {
-        try stdout.print("{s}: No such file or directory\n", .{command[1]});
+        try self.stdout.print("{s}: No such file or directory\n", .{command[1]});
     }
 }
 
-pub fn doUnknown(command: Command, allocator: std.mem.Allocator) !void {
-    if (try findMatchingPath(allocator, command[0])) |_| {
-        const response = try execute(command, allocator);
+pub fn doUnknown(self: *Shell, command: Command) !void {
+    if (try findMatchingPath(self, command[0])) |_| {
+        const response = try execute(self, command);
         if (response != 0) {
-            try stdout.print("{s}: failed with status code {d}\n", .{ command[0], response });
+            try self.stdout.print("{s}: failed with status code {d}\n", .{ command[0], response });
         }
     } else {
-        try stdout.print("{s}: command not found\n", .{command[0]});
+        try self.stdout.print("{s}: command not found\n", .{command[0]});
     }
 }
 
-
 // for a command check if it exists in path
-fn findMatchingPath(allocator: std.mem.Allocator, command: []const u8) !?[]const u8 {
-    var env_map = try std.process.getEnvMap(allocator);
-    defer env_map.deinit();
-
-    const path_env = env_map.get("PATH") orelse "";
-
+fn findMatchingPath(self: *Shell, command: []const u8) !?[]const u8 {
     var paths: std.ArrayList([]const u8) = .empty;
-    defer paths.deinit(allocator);
+    defer paths.deinit(self.allocator);
 
-    var it = std.mem.splitSequence(u8, path_env, ":");
+    var it = std.mem.splitSequence(u8, self.path(), ":");
     while (it.next()) |p| {
-        const copy = try allocator.dupe(u8, p);
-        try paths.append(allocator, copy);
+        const copy = try self.allocator.dupe(u8, p);
+        try paths.append(self.allocator, copy);
     }
 
     for (paths.items) |path| {
-        const full_path = try std.fs.path.join(allocator, &[_][]const u8{ path, command });
-        if (std.fs.accessAbsolute(full_path, .{})) {
+        const full_path = try std.fs.path.join(self.allocator, &[_][]const u8{ path, command });
+        if (std.Io.Dir.accessAbsolute(self.io, full_path, .{})) {
             return full_path;
         } else |_| {}
     }
@@ -117,26 +105,21 @@ fn findMatchingPath(allocator: std.mem.Allocator, command: []const u8) !?[]const
 }
 
 // Execute an arbritary command in the current terminal window (ex: pwd,..)
-fn execute(command: []const []const u8, allocator: std.mem.Allocator) !u8 {
-    var child = std.process.Child.init(command, allocator);
+fn execute(self: *Shell, command: []const []const u8) !u8 {
+    var child = try std.process.spawn(self.io, .{
+        .argv = command,
+        .stdin = .inherit,
+        .stdout = .inherit,
+        .stderr = .inherit,
+    });
 
-    child.stdin_behavior = .Inherit;
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
-
-    child.spawn() catch {
-        std.debug.print("command not found: {s}\n", .{command[0]});
-        return 127;
-    };
-
-    return switch (try child.wait()) {
-        .Exited => |code| code,
-        .Signal => |sig| blk: {
+    return switch (try child.wait(self.io)) {
+        .exited => |code| code,
+        .signal => |sig| blk: {
             std.debug.print("killed by signal {d}\n", .{sig});
             break :blk 1;
         },
-        .Stopped => 1,
-        .Unknown => 1,
+        .stopped => 1,
+        .unknown => 1,
     };
 }
-
