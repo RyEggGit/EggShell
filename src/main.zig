@@ -8,6 +8,7 @@ const shell = @import("shell.zig");
 
 var stdout_buffer: [4096]u8 = undefined;
 var stdin_buffer: [4096]u8 = undefined;
+var prompt_buf: [4096]u8 = undefined;
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
@@ -28,7 +29,8 @@ pub fn main(init: std.process.Init) !void {
     };
 
     while (true) {
-        try s.stdout.print("$ ", .{});
+        _ = try std.process.currentPath(io, &prompt_buf);
+        try s.stdout.print("{s} $ ", .{prompt_buf});
         try s.stdout.flush();
         const input = try s.stdin.takeDelimiter('\n') orelse {
             try s.stdout.print("\n", .{});
