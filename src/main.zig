@@ -9,8 +9,14 @@ const shell = @import("shell.zig");
 const backspace = 127;
 const enter = 10;
 const esc = '\x1b';
+const prompt_suffix = "% ";
+const path_max = 4096;
 
-const PROMPT = "$ ";
+fn buildPrompt(io: std.Io, buf: []u8) ![]const u8 {
+    const len = try std.process.currentPath(io, buf[0 .. buf.len - prompt_suffix.len]);
+    @memcpy(buf[len..][0..prompt_suffix.len], prompt_suffix);
+    return buf[0 .. len + prompt_suffix.len];
+}
 
 fn ctrlKey(k: u8) u8 {
     return k & 0x1f;
@@ -20,8 +26,8 @@ fn clearScreen(out: *std.Io.Writer) !void {
     try out.writeAll("\x1b[2J\x1b[H");
 }
 
-fn redraw(out: *std.Io.Writer, line: []const u8, cursor: usize) !void {
-    try out.print("\r\x1b[K{s}{s}\r\x1b[{d}C", .{ PROMPT, line, PROMPT.len + cursor });
+fn redraw(out: *std.Io.Writer, current_dir: []const u8, line: []const u8, cursor: usize) !void {
+    try out.print("\r\x1b[K{s}{s}\r\x1b[{d}C", .{ current_dir, line, current_dir.len + cursor });
     try out.flush();
 }
 
@@ -67,7 +73,7 @@ fn enableRawMode(old_mode: std.posix.termios) !void {
     try std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, raw_mode);
 }
 
-fn readLine(s: *shell.Shell) !?[]u8 {
+fn readLine(current_dir: []const u8, s: *shell.Shell) !?[]u8 {
     var cursor: usize = 0;
     var line = try std.ArrayList(u8).initCapacity(s.allocator, 128);
 
@@ -75,7 +81,7 @@ fn readLine(s: *shell.Shell) !?[]u8 {
     try enableRawMode(old_mode);
     defer std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, old_mode) catch {};
 
-    try redraw(s.stdout, line.items, cursor);
+    try redraw(s.stdout, current_dir, line.items, cursor);
 
     var buf: [1]u8 = undefined;
     while (true) {
@@ -145,7 +151,7 @@ fn readLine(s: *shell.Shell) !?[]u8 {
             cursor += 1;
         }
 
-        try redraw(s.stdout, line.items, cursor);
+        try redraw(s.stdout, current_dir, line.items, cursor);
     }
 }
 
@@ -170,8 +176,10 @@ pub fn main(init: std.process.Init) !void {
         .env = init.environ_map,
     };
 
+    var current_dir_buf: [path_max + prompt_suffix.len]u8 = undefined;
     while (true) {
-        const input = try readLine(&s) orelse std.process.exit(0);
+        const current_dir = try buildPrompt(io, &current_dir_buf);
+        const input = try readLine(current_dir, &s) orelse std.process.exit(0);
         const tokens = try parser.lex(input, s.allocator);
         defer s.allocator.free(tokens);
         var p = parser.Parser.new(s.allocator, tokens);
