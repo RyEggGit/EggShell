@@ -77,6 +77,7 @@ fn readLine(current_dir: []const u8, s: *shell.Shell) !?[]u8 {
     var cursor: usize = 0;
     var line = try std.ArrayList(u8).initCapacity(s.allocator, 128);
 
+    try s.stdout.flush();
     const old_mode = try std.posix.tcgetattr(std.posix.STDIN_FILENO);
     try enableRawMode(old_mode);
     defer std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, old_mode) catch {};
